@@ -92,6 +92,8 @@ jobs:
           printf '%s' "$URLS" | while IFS= read -r u; do
             u="$(printf '%s' "$u" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/\r//')"
             [ -z "$u" ] && continue
+            # 自动编码空格与特殊字符（curl 会拒绝含未编码空格的 URL：Malformed input）
+            u="$(printf '%s' "$u" | sed 's/ /%20/g; s/\[/%5B/g; s/\]/%5D/g; s/{/%7B/g; s/}/%7D/g')"
             i=$((i+1))
             name="$(basename "${u%%\?*}" | sed 's/%20/_/g' | tr -cd 'A-Za-z0-9._-')"
             [ -z "$name" ] && name="file_$i"
