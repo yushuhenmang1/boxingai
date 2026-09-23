@@ -1,0 +1,1 @@
+{"responseHeader":{"status":0,"QTime":17,"params":{"query":"title:&quot;better boxing&quot;","qin":"title:(&quot;better boxing&quot;)","fields":"identifier,title,year,mediatype","wt":"json","rows":100,"start":0}},"response":{"numFound":1,"start":0,"docs":[{"identifier":"beginnersguideto0000barn","mediatype":"texts","title":"The beginner's guide to better boxing","year":1980}]}}
