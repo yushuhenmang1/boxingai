@@ -1,7 +1,7 @@
 # IA Fetch manifest
 
-- time: 2026-09-23T11:07:46Z
-- note: retry 4 texts (url-encoded)
+- time: 2026-09-23T11:09:13Z
+- note: retry survey of boxing laws
 
 | file | size |
 |---|---|
