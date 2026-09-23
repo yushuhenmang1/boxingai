@@ -1,0 +1,143 @@
+# Internet Archive 下载中转（GitHub Actions 版）
+#
+# ── 为什么可行（2026-09-23 实测）──────────────────────────────
+#   本机 → archive.org：三层封锁（主站 IP 阻断 / TLS SNI 阻断 / HTTP Host 头阻断）
+#   本机 → GitHub：全链路可达（github.com / raw.githubusercontent.com / api.github.com 均 200）
+#   GitHub Actions 运行器在境外 → 可正常访问 archive.org
+#   故：Actions 代下 → 提交回仓库 → 本机从 raw.githubusercontent.com 直取（无需 token）
+#
+# ── 放置位置 ─────────────────────────────────────────────────
+#   你自己 GitHub 仓库的：.github/workflows/ia-fetch.yml
+#
+# ── 用法 ─────────────────────────────────────────────────────
+#   Actions 页面 → 左侧选 IA Fetch → Run workflow：
+#     · search：填 archive.org 搜索式（默认已预填 V-Five 系列探测式），结果存 search_*.txt/json
+#     · urls  ：填要下载的 URL（每行一个），文件落到 ia_downloads/
+#   两个可同时填（先搜索发现 identifier，再另跑一次下载）。
+#
+# ── 重要提示 ────────────────────────────────────────────────
+#   ① 优先下 **_djvu.txt**（OCR 文本，通常几百 KB～2MB），而非扫描 PDF——
+#      GitHub 单文件上限 100MB，且我们真正需要的是文本内容（翻译/精读）。
+#      下载页格式：https://ia<NNN>.us.archive.org/<n>/items/<identifier>/<identifier>_djvu.txt
+#      （若直链 404，改用 https://archive.org/download/<identifier>/<identifier>_djvu.txt，
+#        Actions 里走 archive.org 主站是通的）
+#   ② 若仓库曾提交过同名文件，后续提交是增量（历史会保留旧版，注意仓库体积）。
+#   ③ 私有仓库同样可用（raw 拉取需 token；改用它方式二选一：把仓库设为公开，或用 Pages）。
+
+name: IA Fetch
+
+on:
+  workflow_dispatch:
+    inputs:
+      search:
+        description: "archive.org 搜索式（每行一个，结果存 ia_downloads/search_*.txt）"
+        required: false
+        default: |
+          identifier:TheNavalAviationPhysicalTrainingManuals*
+          title:("naval aviation physical training")
+          title:(boxing) AND date:[1930-01-01 TO 1960-12-31]
+      urls:
+        description: "要下载的 URL（每行一个；建议优先 *_djvu.txt）"
+        required: false
+        default: ""
+      note:
+        description: "本次任务说明（写入 MANIFEST.md）"
+        required: false
+        default: "ia-fetch"
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare
+        run: mkdir -p ia_downloads
+
+      - name: Search archive.org (identifier discovery)
+        if: inputs.search != ''
+        env:
+          SEARCH: ${{ inputs.search }}
+        run: |
+          set -uo pipefail
+          n=0
+          while IFS= read -r q; do
+            q="$(echo "$q" | tr -d '\r' | xargs)"
+            [ -z "$q" ] && continue
+            n=$((n+1))
+            echo "=== query $n: $q"
+            Q=$(Q="$q" python3 -c "import os,urllib.parse;print(urllib.parse.quote(os.environ['Q']))")
+            curl -sS -L -m 180 \
+              "https://archive.org/advancedsearch.php?q=${Q}&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year&fl%5B%5D=mediatype&rows=100&page=1&output=json" \
+              -o "ia_downloads/search_${n}.json" || echo "  !! query failed"
+            python3 - "$n" <<'PY' || true
+import json, sys
+n = sys.argv[1]
+try:
+    d = json.load(open(f"ia_downloads/search_{n}.json"))
+    docs = d["response"]["docs"]
+    lines = [f"{x.get('identifier')} | {x.get('title')} | {x.get('year')} | {x.get('mediatype')}" for x in docs]
+    print(f"  found {len(docs)}")
+    for l in lines:
+        print("   ", l)
+    open(f"ia_downloads/search_{n}.txt", "w", encoding="utf-8").write(
+        f"# query {n}\n" + "\n".join(lines) + "\n")
+except Exception as e:
+    print("  parse fail:", e)
+PY
+          done <<< "$SEARCH"
+
+      - name: Download files
+        if: inputs.urls != ''
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          set -uo pipefail
+          i=0
+          ok=0; fail=0
+          while IFS= read -r u; do
+            u="$(echo "$u" | tr -d '\r' | xargs)"
+            [ -z "$u" ] && continue
+            i=$((i+1))
+            name="$(basename "${u%%\?*}" | sed 's/%20/_/g' | tr -cd 'A-Za-z0-9._-')"
+            [ -z "$name" ] && name="file_$i"
+            out="ia_downloads/${i}_${name}"
+            echo "[$i] $u"
+            if curl -L --fail --retry 3 --retry-delay 5 -m 1200 \
+                 -A "Mozilla/5.0 (compatible; ia-fetch-actions)" \
+                 -o "$out" "$u"; then
+              ok=$((ok+1)); echo "  ok $(du -h "$out" | cut -f1)"
+            else
+              fail=$((fail+1)); echo "  !! FAILED"; rm -f "$out"
+            fi
+          done <<< "$URLS"
+          echo "done: ok=$ok fail=$fail"
+
+      - name: Write manifest
+        run: |
+          {
+            echo "# IA Fetch manifest"
+            echo ""
+            echo "- time: $(date -u +%FT%TZ)"
+            echo "- note: ${{ inputs.note }}"
+            echo ""
+            echo "| file | size |"
+            echo "|---|---|"
+            find ia_downloads -maxdepth 1 -type f | sort | while read -r f; do
+              echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
+            done
+          } > ia_downloads/MANIFEST.md
+          echo "--- 结果 ---"
+          find ia_downloads -maxdepth 1 -type f -exec du -h {} \; | sort -k2
+
+      - name: Commit back
+        run: |
+          git config user.name "ia-fetch-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f ia_downloads
+          git commit -m "ia-fetch: ${{ inputs.note }} [${{ github.run_id }}]" || echo "nothing to commit"
+          git push
