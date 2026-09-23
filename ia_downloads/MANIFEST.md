@@ -1,7 +1,7 @@
 # IA Fetch manifest
 
-- time: 2026-09-23T11:04:27Z
-- note: metadata probe batch1
+- time: 2026-09-23T11:06:14Z
+- note: download 4 open-domain boxing texts
 
 | file | size |
 |---|---|
